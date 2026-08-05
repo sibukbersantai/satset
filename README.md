@@ -3,7 +3,7 @@
 **Send and receive files between Android and Mac using Google Quick Share (Nearby Share). A free, open-source AirDrop alternative for Android-to-Mac file transfer.**
 
 [![Download](https://img.shields.io/github/v/release/sibukbersantai/satset?label=download&style=flat-square)](https://github.com/sibukbersantai/satset/releases/latest)
-[![Platform](https://img.shields.io/badge/macOS-11%2B-black?style=flat-square)](#install)
+[![Platform](https://img.shields.io/badge/macOS-10.15%2B-black?style=flat-square)](#install)
 [![Licence](https://img.shields.io/badge/licence-Unlicense-blue?style=flat-square)](/UNLICENSE)
 
 Satset lives in your menu bar. Android phones see your Mac in the Quick Share sheet and send straight to it; files land in Downloads. To send the other way, right-click any file in Finder → Share → Satset.
@@ -21,7 +21,7 @@ Satset lives in your menu bar. Android phones see your Mac in the Quick Share sh
 3. **First launch:** right-click the app → **Open** → confirm. macOS blocks it on a double-click because the build is signed but not notarized.
 4. Allow **Notifications** and **Local Network** when asked. Without notifications the accept prompt for incoming files never appears.
 
-Requires macOS 11 or later. Apple silicon and Intel.
+Requires macOS 10.15 Catalina or later. Universal binary — Apple silicon and Intel.
 
 To launch at login, add Satset in System Settings → General → Login Items.
 
