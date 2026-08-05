@@ -145,16 +145,23 @@ class ShareViewController: NSViewController, ShareExtensionDelegate{
 		sheetWindow.setContentSize(size)
 		
 		let qrKey=NearbyConnectionManager.shared.generateQrCodeKey()
-		let qrCodeImage=try! QRCode.build
-			.text("https://quickshare.google/qrcode#key=\(qrKey)")
-			.backgroundColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 0))
-			.quietZonePixelCount(3)
-			.onPixels.shape(.circle())
-			.eye.shape(.roundedPointing())
-			.errorCorrection(.low)
-			.generate.image(dimension: Int(qrCodeView!.frame.width)*2)
-		qrCodeView!.image=NSImage(cgImage: qrCodeImage, size: qrCodeImage.size)
-		
+		do{
+			let qrCodeImage=try QRCode.build
+				.text("https://quickshare.google/qrcode#key=\(qrKey)")
+				.backgroundColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 0))
+				.quietZonePixelCount(3)
+				.onPixels.shape(.circle())
+				.eye.shape(.roundedPointing())
+				.errorCorrection(.low)
+				.generate.image(dimension: Int(qrCodeView!.frame.width)*2)
+			qrCodeView!.image=NSImage(cgImage: qrCodeImage, size: qrCodeImage.size)
+		}catch{
+			// Losing the QR code shouldn't kill the share sheet -- the device list still works.
+			print("Error generating QR code: \(error)")
+			NearbyConnectionManager.shared.clearQrCodeKey()
+			return
+		}
+
 		self.sheetWindow=sheetWindow
 		window.beginSheet(sheetWindow) { response in
 			self.sheetWindow=nil

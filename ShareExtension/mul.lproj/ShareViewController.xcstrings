@@ -2,67 +2,67 @@
   "sourceLanguage" : "en",
   "strings" : {
     "0xp-rC-2gr.title" : {
-      "comment" : "Class = \"NSTextFieldCell\"; title = \"NearDrop\"; ObjectID = \"0xp-rC-2gr\";",
+      "comment" : "Class = \"NSTextFieldCell\"; title = \"Satset\"; ObjectID = \"0xp-rC-2gr\";",
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "NearDrop"
+            "value" : "Satset"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "NearDrop"
+            "value" : "Satset"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "NearDrop"
+            "value" : "Satset"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "NearDrop"
+            "value" : "Satset"
           }
         },
         "nl" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "NearDrop"
+            "value" : "Satset"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "NearDrop"
+            "value" : "Satset"
           }
         },
         "ro" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "NearDrop"
+            "value" : "Satset"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "NearDrop"
+            "value" : "Satset"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "NearDrop"
+            "value" : "Satset"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "NearDrop"
+            "value" : "Satset"
           }
         }
       },

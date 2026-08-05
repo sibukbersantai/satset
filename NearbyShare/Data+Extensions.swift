@@ -1,6 +1,6 @@
 //
 //  Data+URLSafeBase64.swift
-//  NearDrop
+//  Satset
 //
 //  Created by Grishka on 08.04.2023.
 //

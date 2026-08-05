@@ -1,6 +1,6 @@
 //
 //  NearbyConnectionManager.swift
-//  NearDrop
+//  Satset
 //
 //  Created by Grishka on 08.04.2023.
 //
@@ -167,9 +167,30 @@ struct EndpointInfo{
 	}
 }
 
+/// Whether the current network can carry Nearby Share at all. Discovery is mDNS based,
+/// so it needs a network that forwards multicast between its clients.
+public enum NetworkCompatibility:Equatable{
+	/// Nothing obviously wrong. Not a promise -- client isolation on a normal router
+	/// looks identical from here and can only be found by failing to see anything.
+	case ok
+	/// No usable network at all.
+	case offline
+	/// Apple's Personal Hotspot, which never bridges multicast between its clients,
+	/// so Android can never see this Mac. Identified by its fixed 172.20.10.0/28 subnet.
+	case personalHotspot
+	/// Low Data Mode or a metered connection. Discovery usually still works, worth surfacing.
+	case constrained
+}
+
 public protocol MainAppDelegate{
 	func obtainUserConsent(for transfer:TransferMetadata, from device:RemoteDeviceInfo)
 	func incomingTransfer(id:String, didFinishWith error:Error?)
+	func networkCompatibilityChanged(to compatibility:NetworkCompatibility)
+}
+
+public extension MainAppDelegate{
+	// Default so existing conformances keep compiling.
+	func networkCompatibilityChanged(to compatibility:NetworkCompatibility){}
 }
 
 public protocol ShareExtensionDelegate:AnyObject{
@@ -185,9 +206,20 @@ public protocol ShareExtensionDelegate:AnyObject{
 
 public class NearbyConnectionManager : NSObject, NetServiceDelegate, InboundNearbyConnectionDelegate, OutboundNearbyConnectionDelegate{
 	
-	private var tcpListener:NWListener;
+	private var tcpListener:NWListener?
 	public let endpointID:[UInt8]=generateEndpointID()
 	private var mdnsService:NetService?
+	// Advertising has to survive network changes, sleep/wake and mDNSResponder restarts,
+	// otherwise the Mac silently stops being discoverable until the app is relaunched.
+	private var isVisible=false
+	private var listenerRestartDelay:TimeInterval=1
+	private var pathMonitor:NWPathMonitor?
+	private var advertisedInterfaces:Set<String>=[]
+	public private(set) var networkCompatibility:NetworkCompatibility = .ok
+	// These four are owned by the main queue. Connection and listener callbacks arrive on
+	// background queues, so they hop onto main before touching them -- Swift dictionaries
+	// are not thread-safe, and concurrent mutation corrupts memory rather than just
+	// losing an entry.
 	private var activeConnections:[String:InboundNearbyConnection]=[:]
 	private var foundServices:[String:FoundServiceInfo]=[:]
 	private var shareExtensionDelegates:[ShareExtensionDelegate]=[]
@@ -206,28 +238,171 @@ public class NearbyConnectionManager : NSObject, NetServiceDelegate, InboundNear
 	public static let shared=NearbyConnectionManager()
 	
 	override init() {
-		tcpListener=try! NWListener(using: NWParameters(tls: .none))
 		super.init()
 	}
-	
+
 	public func becomeVisible(){
+		guard !isVisible else {return}
+		isVisible=true
+		listenerRestartDelay=1
 		startTCPListener()
+		startPathMonitor()
 	}
-	
+
+	/// Stops advertising and stops accepting new incoming transfers. Sending is unaffected --
+	/// discovery uses a separate browser, so you can still share files while invisible.
+	/// Transfers already in progress are left alone.
+	public func becomeInvisible(){
+		isVisible=false
+		teardownMDNS()
+		let listener=tcpListener
+		tcpListener=nil
+		listener?.cancel()
+		// Keep monitoring so network warnings still update while hidden.
+		startPathMonitor()
+	}
+
 	private func startTCPListener(){
-		tcpListener.stateUpdateHandler={(state:NWListener.State) in
-			if case .ready = state {
-				self.initMDNS()
+		guard isVisible, tcpListener==nil else {return}
+		let listener:NWListener
+		do{
+			listener=try NWListener(using: NWParameters(tls: .none))
+		}catch{
+			NSLog("Satset: failed to create TCP listener: \(error)")
+			scheduleListenerRestart()
+			return
+		}
+		tcpListener=listener
+		// The listener runs on a background queue, but all advertising state is owned by
+		// the main queue -- NetService needs a live run loop to deliver its callbacks anyway.
+		listener.stateUpdateHandler={[weak self] (state:NWListener.State) in
+			DispatchQueue.main.async {
+				guard let self=self, self.tcpListener===listener else {return}
+				switch state{
+				case .ready:
+					self.listenerRestartDelay=1
+					self.initMDNS()
+				case let .failed(error):
+					NSLog("Satset: TCP listener failed: \(error)")
+					self.restartListener()
+				case .cancelled:
+					self.teardownMDNS()
+				case let .waiting(error):
+					NSLog("Satset: TCP listener waiting: \(error)")
+				default:
+					break
+				}
 			}
 		}
-		tcpListener.newConnectionHandler={(connection:NWConnection) in
+		listener.newConnectionHandler={[weak self] (connection:NWConnection) in
+			guard let self=self else {return}
 			let id=UUID().uuidString
 			let conn=InboundNearbyConnection(connection: connection, id: id)
-			self.activeConnections[id]=conn
 			conn.delegate=self
-			conn.start()
+			DispatchQueue.main.async {
+				// Registered before starting, so callbacks can never arrive before the lookup works.
+				self.activeConnections[id]=conn
+				conn.start()
+			}
 		}
-		tcpListener.start(queue: .global(qos: .utility))
+		listener.start(queue: .global(qos: .utility))
+	}
+
+	private func restartListener(){
+		let listener=tcpListener
+		tcpListener=nil
+		listener?.cancel()
+		teardownMDNS()
+		scheduleListenerRestart()
+	}
+
+	private func scheduleListenerRestart(){
+		guard isVisible else {return}
+		let delay=listenerRestartDelay
+		listenerRestartDelay=min(delay*2, 30)
+		DispatchQueue.main.asyncAfter(deadline: .now()+delay){
+			self.startTCPListener()
+		}
+	}
+
+	/// Watches for Wi-Fi changes, VPN toggles and sleep/wake, all of which invalidate
+	/// the existing mDNS registration without the listener itself ever failing.
+	private func startPathMonitor(){
+		guard pathMonitor==nil else {return}
+		let monitor=NWPathMonitor()
+		pathMonitor=monitor
+		monitor.pathUpdateHandler={[weak self] path in
+			guard let self=self else {return}
+			let interfaces=Set(path.availableInterfaces.map{$0.name})
+			let compatibility=Self.evaluateCompatibility(of: path)
+			DispatchQueue.main.async {
+				if compatibility != self.networkCompatibility{
+					self.networkCompatibility=compatibility
+					NSLog("Satset: network compatibility is now \(compatibility)")
+					self.mainAppDelegate?.networkCompatibilityChanged(to: compatibility)
+				}
+				guard self.isVisible else {return}
+				guard path.status == .satisfied else {return}
+				guard interfaces != self.advertisedInterfaces else {return}
+				self.advertisedInterfaces=interfaces
+				if let listener=self.tcpListener{
+					if case .ready = listener.state {
+						self.initMDNS()
+					}
+				}else{
+					self.startTCPListener()
+				}
+			}
+		}
+		monitor.start(queue: .global(qos: .utility))
+	}
+
+	private static func evaluateCompatibility(of path:NWPath)->NetworkCompatibility{
+		guard path.status == .satisfied else {return .offline}
+		if isOnPersonalHotspot() {return .personalHotspot}
+		if path.isConstrained || path.isExpensive {return .constrained}
+		return .ok
+	}
+
+	/// iOS Personal Hotspot always hands out addresses on 172.20.10.0/28. That subnet is a
+	/// reliable fingerprint -- no ordinary router uses it.
+	private static func isOnPersonalHotspot()->Bool{
+		var addrs:UnsafeMutablePointer<ifaddrs>?
+		guard getifaddrs(&addrs)==0, let first=addrs else {return false}
+		defer {freeifaddrs(addrs)}
+		for ptr in sequence(first: first, next: {$0.pointee.ifa_next}){
+			let flags=Int32(ptr.pointee.ifa_flags)
+			guard flags & IFF_UP == IFF_UP, flags & IFF_LOOPBACK == 0 else {continue}
+			guard let sa=ptr.pointee.ifa_addr, sa.pointee.sa_family==UInt8(AF_INET) else {continue}
+			var host=[CChar](repeating: 0, count: Int(NI_MAXHOST))
+			guard getnameinfo(sa, socklen_t(sa.pointee.sa_len), &host, socklen_t(host.count),
+							  nil, 0, NI_NUMERICHOST)==0 else {continue}
+			if String(cString: host).hasPrefix("172.20.10."){
+				return true
+			}
+		}
+		return false
+	}
+
+	/// The name Android shows for this Mac. `Host.current()` caches aggressively and can
+	/// return nil, which used to be force-unwrapped.
+	private static func localDeviceName()->String{
+		if let name=Host.current().localizedName, !name.isEmpty{
+			return name
+		}
+		var name=ProcessInfo.processInfo.hostName
+		if let dot=name.firstIndex(of: "."){
+			name=String(name[name.startIndex..<dot])
+		}
+		return name.isEmpty ? "Mac" : name
+	}
+
+	private func teardownMDNS(){
+		guard let service=mdnsService else {return}
+		// Clear the delegate first so the resulting netServiceDidStop doesn't recurse.
+		service.delegate=nil
+		mdnsService=nil
+		service.stop()
 	}
 	
 	private static func generateEndpointID()->[UInt8]{
@@ -247,31 +422,71 @@ public class NearbyConnectionManager : NSObject, NetServiceDelegate, InboundNear
 			0, 0
 		]
 		let name=Data(nameBytes).urlSafeBase64EncodedString()
-		let endpointInfo=EndpointInfo(name: Host.current().localizedName!, deviceType: .computer)
-		
-		let port:Int32=Int32(tcpListener.port!.rawValue)
-		mdnsService=NetService(domain: "", type: "_FC9F5ED42C8A._tcp.", name: name, port: port)
-		mdnsService?.delegate=self
-		mdnsService?.setTXTRecord(NetService.data(fromTXTRecord: [
+		let endpointInfo=EndpointInfo(name: Self.localDeviceName(), deviceType: .computer)
+
+		guard let listenerPort=tcpListener?.port else {
+			NSLog("Satset: TCP listener has no port yet, not advertising")
+			return
+		}
+		teardownMDNS()
+		let port:Int32=Int32(listenerPort.rawValue)
+		let service=NetService(domain: "", type: "_FC9F5ED42C8A._tcp.", name: name, port: port)
+		mdnsService=service
+		service.delegate=self
+		service.setTXTRecord(NetService.data(fromTXTRecord: [
 			"n": endpointInfo.serialize().urlSafeBase64EncodedString().data(using: .utf8)!
 		]))
-		mdnsService?.publish()
+		// Explicitly scheduled on the main run loop so the delegate callbacks below run at all.
+		service.schedule(in: .main, forMode: .common)
+		service.publish()
+	}
+
+	public func netServiceDidPublish(_ sender: NetService) {
+		NSLog("Satset: advertising as \(sender.name) on port \(sender.port)")
+	}
+
+	public func netService(_ sender: NetService, didNotPublish errorDict: [String : NSNumber]) {
+		// Previously silent: the Mac would just never show up on Android with no indication why.
+		NSLog("Satset: failed to advertise over mDNS: \(errorDict)")
+		DispatchQueue.main.asyncAfter(deadline: .now()+5){
+			guard self.isVisible, self.mdnsService===sender else {return}
+			self.initMDNS()
+		}
+	}
+
+	public func netServiceDidStop(_ sender: NetService) {
+		guard isVisible, mdnsService===sender else {return}
+		NSLog("Satset: mDNS advertising stopped unexpectedly, re-publishing")
+		DispatchQueue.main.asyncAfter(deadline: .now()+1){
+			guard self.isVisible, self.mdnsService===sender else {return}
+			self.initMDNS()
+		}
 	}
 	
 	func obtainUserConsent(for transfer: TransferMetadata, from device: RemoteDeviceInfo, connection: InboundNearbyConnection) {
-		guard let delegate=mainAppDelegate else {return}
-		delegate.obtainUserConsent(for: transfer, from: device)
+		// Arrives on the connection queue; the app delegate posts notifications and keeps
+		// its own state, so it must not be called from there.
+		DispatchQueue.main.async {
+			guard let delegate=self.mainAppDelegate else {return}
+			delegate.obtainUserConsent(for: transfer, from: device)
+		}
 	}
-	
+
 	func connectionWasTerminated(connection:InboundNearbyConnection, error:Error?){
-		guard let delegate=mainAppDelegate else {return}
-		delegate.incomingTransfer(id: connection.id, didFinishWith: error)
-		activeConnections.removeValue(forKey: connection.id)
+		DispatchQueue.main.async {
+			self.mainAppDelegate?.incomingTransfer(id: connection.id, didFinishWith: error)
+			self.activeConnections.removeValue(forKey: connection.id)
+		}
 	}
-	
+
+	/// Safe to call from any queue -- notification delegate callbacks aren't guaranteed
+	/// to arrive on the main thread.
 	public func submitUserConsent(transferID:String, accept:Bool){
-		guard let conn=activeConnections[transferID] else {return}
-		conn.submitUserConsent(accepted: accept)
+		let work={
+			guard let conn=self.activeConnections[transferID] else {return}
+			conn.submitUserConsent(accepted: accept)
+		}
+		if Thread.isMainThread { work() } else { DispatchQueue.main.async(execute: work) }
 	}
 	
 	public func startDeviceDiscovery(){
@@ -451,40 +666,39 @@ public class NearbyConnectionManager : NSObject, NetServiceDelegate, InboundNear
 	}
 	
 	func outboundConnectionWasEstablished(connection: OutboundNearbyConnection) {
-		guard let transfer=outgoingTransfers[connection.id] else {return}
 		DispatchQueue.main.async {
-			transfer.delegate.connectionWasEstablished(pinCode: connection.pinCode!)
+			guard let transfer=self.outgoingTransfers[connection.id] else {return}
+			guard let pinCode=connection.pinCode else {return}
+			transfer.delegate.connectionWasEstablished(pinCode: pinCode)
 		}
 	}
-	
+
 	func outboundConnectionTransferAccepted(connection: OutboundNearbyConnection) {
-		guard let transfer=outgoingTransfers[connection.id] else {return}
 		DispatchQueue.main.async {
+			guard let transfer=self.outgoingTransfers[connection.id] else {return}
 			transfer.delegate.transferAccepted()
 		}
 	}
-	
+
 	func outboundConnection(connection: OutboundNearbyConnection, transferProgress: Double) {
-		guard let transfer=outgoingTransfers[connection.id] else {return}
 		DispatchQueue.main.async {
+			guard let transfer=self.outgoingTransfers[connection.id] else {return}
 			transfer.delegate.transferProgress(progress: transferProgress)
 		}
 	}
-	
+
 	func outboundConnection(connection: OutboundNearbyConnection, failedWithError: Error) {
-		guard let transfer=outgoingTransfers[connection.id] else {return}
 		DispatchQueue.main.async {
+			guard let transfer=self.outgoingTransfers.removeValue(forKey: connection.id) else {return}
 			transfer.delegate.connectionFailed(with: failedWithError)
 		}
-		outgoingTransfers.removeValue(forKey: connection.id)
 	}
-	
+
 	func outboundConnectionTransferFinished(connection: OutboundNearbyConnection) {
-		guard let transfer=outgoingTransfers[connection.id] else {return}
 		DispatchQueue.main.async {
+			guard let transfer=self.outgoingTransfers.removeValue(forKey: connection.id) else {return}
 			transfer.delegate.transferFinished()
 		}
-		outgoingTransfers.removeValue(forKey: connection.id)
 	}
 }
 

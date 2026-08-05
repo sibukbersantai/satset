@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Satset needs local network access to discover nearby Android devices and receive files from them.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_FC9F5ED42C8A._tcp</string>
+	</array>
+</dict>
+</plist>

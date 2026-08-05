@@ -1,5 +1,9 @@
 # Google's Nearby Share protocol
 
+> This protocol documentation was written by [grishka](https://github.com/grishka) as part of
+> [NearDrop](https://github.com/grishka/NearDrop). It is reproduced here unchanged. The
+> reverse engineering it describes is entirely their work, not Satset's.
+
 This document describes the Nearby Share protocol as understood by me (@grishka) from Chromium sources (that are way too convoluted) and decompiled Google Services Framework apk (that, despite being a decompilation of obfuscated code, is still more helpful than Chromium sources).
 
 The protocol is peer-to-peer, end-to-end encrypted. Overall, it appears like it was mostly designed to run over an unreliable medium like UDP, but I've only observed it over TCP.

@@ -1,6 +1,6 @@
 //
 //  NearbyConnection.swift
-//  NearDrop
+//  Satset
 //
 //  Created by Grishka on 09.04.2023.
 //
@@ -16,7 +16,7 @@ import BigInt
 
 class NearbyConnection{
 	internal static let SANE_FRAME_LENGTH=5*1024*1024
-	private static let dispatchQueue=DispatchQueue(label: "me.grishka.NearDrop.queue", qos: .utility) // FIFO (non-concurrent) queue to avoid those exciting concurrency bugs
+	private static let dispatchQueue=DispatchQueue(label: "com.hendikusuma.Satset.queue", qos: .utility) // FIFO (non-concurrent) queue to avoid those exciting concurrency bugs
 	
 	internal let connection:NWConnection
 	internal var remoteDeviceInfo:RemoteDeviceInfo?
@@ -428,8 +428,14 @@ class NearbyConnection{
 		alert.type=type
 		var msg=Securegcm_Ukey2Message()
 		msg.messageType = .alert
-		msg.messageData = try! alert.serializedData()
-		sendFrameAsync(try! msg.serializedData())
+		// This runs while already handling a protocol error, so failing to send the alert
+		// must not take the app down with it -- disconnecting is what actually matters.
+		do{
+			msg.messageData = try alert.serializedData()
+			sendFrameAsync(try msg.serializedData())
+		}catch{
+			print("Error sending UKEY2 alert: \(error)")
+		}
 		disconnect()
 	}
 	

@@ -23,7 +23,7 @@ class QrCodeBackgroundView:MTKView{
 		
 		let mtlLayer:CAMetalLayer=(layer as? CAMetalLayer)!
 		mtlLayer.wantsExtendedDynamicRangeContent=true
-		mtlLayer.cornerRadius=20
+		mtlLayer.cornerRadius=28
 		mtlLayer.masksToBounds=true
 		colorspace=CGColorSpace(name: CGColorSpace.extendedSRGB)
 		colorPixelFormat = .rgba16Float
