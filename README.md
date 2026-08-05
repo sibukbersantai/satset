@@ -55,6 +55,10 @@ Both devices must be on the same Wi-Fi network.
 
 **Appearance** — new name, generated icon, and a restyled interface so it isn't mistaken for upstream.
 
+## Roadmap
+
+Large, parallel, resumable transfers and an AirDrop-style drag-and-drop interface are planned. The technical plan is in [ROADMAP.md](/ROADMAP.md); work is tracked in [milestones](https://github.com/sibukbersantai/satset/milestones) and [issues](https://github.com/sibukbersantai/satset/issues).
+
 ## Limitations
 
 Inherited from the protocol and from macOS, and mostly unfixable. [APPLE_ENHANCEMENT_REQUEST.md](/APPLE_ENHANCEMENT_REQUEST.md) covers the one path that could change this.
